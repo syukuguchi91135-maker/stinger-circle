@@ -109,16 +109,27 @@ export default function App() {
     const initLiff = async () => {
       try {
         await liff.init({ liffId: LIFF_ID });
-        if (liff.isLoggedIn()) {
-          const profile = await liff.getProfile();
-          setLineUser({ userId: profile.userId, displayName: profile.displayName, pictureUrl: profile.pictureUrl });
-        } else {
+
+        if (!liff.isLoggedIn()) {
+          // 未ログインの場合はログイン画面へ遷移（setLiffReadyは呼ばない）
           liff.login();
+          return;
         }
+
+        const profile = await liff.getProfile();
+        console.log("LINE userId:", profile.userId); // 管理者IDの確認用
+        setLineUser({
+          userId:      profile.userId,
+          displayName: profile.displayName,
+          pictureUrl:  profile.pictureUrl,
+        });
+        setLiffReady(true);
+
       } catch (e) {
         console.error("LIFF ERROR:", e.message);
+        // LIFFエラー時もローディングを解除（エラー画面を表示）
+        setLiffReady(true);
       }
-      setLiffReady(true);
     };
     initLiff();
   }, []);
@@ -241,6 +252,18 @@ export default function App() {
   };
 
   const admin = isAdmin(lineUser?.userId);
+
+  // LIFFエラー時（lineUserがnullのまま準備完了した場合）
+  if (liffReady && !lineUser) return (
+    <div style={S.shell}><div style={S.phone}>
+      <div style={S.loadingScreen}>
+        <div style={{fontSize:40}}>⚠️</div>
+        <div style={{fontSize:14,color:"#888",marginTop:8,textAlign:"center",padding:"0 24px"}}>
+          LINEログインに失敗しました。<br/>LINEアプリのトークからURLを開いてください。
+        </div>
+      </div>
+    </div></div>
+  );
 
   if (loading || !liffReady) return (
     <div style={S.shell}><div style={S.phone}>
