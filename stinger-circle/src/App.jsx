@@ -34,7 +34,7 @@ const GROUP_PATH = "stinger_circle"; // ← このファイルに応じて変更
 // LINE Developers コンソール or liff.getProfile() で確認できる userId を追加
 // ──────────────────────────────────────────────────────────
 const ADMIN_USER_IDS = [
-  "Ub38755772c803258b4321f268dab48ed", // 管理者1
+  "U25197b4f80498df9bc15a503c97b66f4", // 管理者1
   "Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", // 管理者2（複数人可）
 ];
 
@@ -45,6 +45,10 @@ const STATUS_META = {
   参加: { bg: "#00B900", light: "#e6f9e6", icon: "✅" },
   欠席: { bg: "#EF4444", light: "#fee2e2", icon: "❌" },
   未定: { bg: "#9CA3AF", light: "#f3f4f6", icon: "🤔" },
+};
+const GENDER_META = {
+  男性: { bg: "#3B82F6", light: "#eff6ff", icon: "👨" },
+  女性: { bg: "#EC4899", light: "#fdf2f8", icon: "👩" },
 };
 
 function isAdmin(userId) {
@@ -112,8 +116,7 @@ export default function App() {
           liff.login();
         }
       } catch (e) {
-        console.warn("LIFF not available (dev mode):", e.message);
-        setLineUser({ userId: "mock_dev_user_001", displayName: "開発テストユーザー", pictureUrl: null });
+        console.error("LIFF ERROR:", e.message);
       }
       setLiffReady(true);
     };
@@ -142,16 +145,16 @@ export default function App() {
   const openEvent = (ev) => {
     setSelectedEvent(ev);
     const myEntry = lineUser && ev.attendees.find(a => a.lineId === lineUser.userId);
-    setRespondForm({ status: myEntry ? myEntry.status : "参加" });
+    setRespondForm({ status: myEntry ? myEntry.status : "参加", gender: myEntry ? myEntry.gender || "" : "" });
     setScreen("event");
   };
 
   // 出欠回答・編集
   const submitResponse = async () => {
     if (!lineUser || !selectedEvent) return;
+    if (!respondForm.gender) return; // 性別未選択ガード
     const existing = selectedEvent.attendees.find(a => a.lineId === lineUser.userId);
     const now = new Date().toISOString();
-    // 参加→参加は順位維持、それ以外は現在時刻（最後尾）
     const entryTime = (existing && existing.status === "参加" && respondForm.status === "参加")
       ? (existing.time instanceof Date ? existing.time.toISOString() : existing.time)
       : now;
@@ -162,8 +165,16 @@ export default function App() {
       status:     respondForm.status,
       time:       entryTime,
       updatedAt:  now,
+      gender:     respondForm.gender,
     };
     await set(ref(db, `${GROUP_PATH}/events/${selectedEvent.fbKey}/attendees/${lineUser.userId}`), entry);
+    // ローカルstateを即時更新
+    const updatedAttendees = [
+      ...selectedEvent.attendees.filter(a => a.lineId !== lineUser.userId),
+      { ...entry, time: new Date(entryTime), updatedAt: new Date(now) },
+    ];
+    const updatedEvent = { ...selectedEvent, attendees: updatedAttendees };
+    setSelectedEvent(updatedEvent);
     setNewHighlight(lineUser.userId);
     setTimeout(() => setNewHighlight(null), 4000);
     showToast(existing ? "✏️ 回答を更新しました！" : "✅ 回答しました！");
@@ -175,6 +186,12 @@ export default function App() {
     if (!lineUser || !selectedEvent) return;
     if (!confirm("回答を取り消しますか？\n取り消し後は再度回答できます。")) return;
     await remove(ref(db, `${GROUP_PATH}/events/${selectedEvent.fbKey}/attendees/${lineUser.userId}`));
+    // ローカルstateを即時更新
+    const updatedEvent = {
+      ...selectedEvent,
+      attendees: selectedEvent.attendees.filter(a => a.lineId !== lineUser.userId),
+    };
+    setSelectedEvent(updatedEvent);
     showToast("🗑️ 回答を取り消しました");
     setScreen("event");
   };
@@ -205,7 +222,13 @@ export default function App() {
 
   const openEdit = (ev) => {
     if (!isAdmin(lineUser?.userId)) return;
-    setEditForm({ ...ev, date: new Date(ev.date), deadline: new Date(ev.deadline) });
+    setEditForm({
+      ...ev,
+      date: new Date(ev.date),
+      deadline: new Date(ev.deadline),
+      capacityMale:   ev.capacityMale   ?? 10,
+      capacityFemale: ev.capacityFemale ?? 10,
+    });
     setScreen("edit");
   };
 
@@ -213,7 +236,7 @@ export default function App() {
     if (!isAdmin(lineUser?.userId)) { showToast("⛔ 管理者のみ作成できます"); return; }
     const base = date || new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate());
     setEditForm({ id: null, title: "", date: base, time: "19:00", endTime: "21:00",
-      place: "", capacity: 20, deadline: base, note: "", color: "#00B900" });
+      place: "", capacityMale: 10, capacityFemale: 10, deadline: base, note: "", color: "#00B900" });
     setScreen("newEvent");
   };
 
@@ -297,9 +320,14 @@ function CalendarScreen({ events, calYear, calMonth, setCalYear, setCalMonth, se
     return ed.getFullYear()===calYear && ed.getMonth()===calMonth && ed.getDate()===d;
   });
   const isFull = (ev) => {
-    const cap = ev.capacity ?? 0;
-    if (cap === 0) return false;
-    return ev.attendees.filter(a=>a.status==="参加").length >= cap;
+    const capM = ev.capacityMale ?? 0;
+    const capF = ev.capacityFemale ?? 0;
+    if (capM === 0 && capF === 0) return false;
+    const maleCount   = ev.attendees.filter(a=>a.status==="参加"&&a.gender==="男性").length;
+    const femaleCount = ev.attendees.filter(a=>a.status==="参加"&&a.gender==="女性").length;
+    const maleOk   = capM === 0 || maleCount < capM;
+    const femaleOk = capF === 0 || femaleCount < capF;
+    return !maleOk && !femaleOk;
   };
   const selectedEvents = selectedDate
     ? events.filter(e => { const ed=new Date(e.date); return ed.getFullYear()===calYear && ed.getMonth()===calMonth && ed.getDate()===selectedDate; })
@@ -368,8 +396,10 @@ function CalendarScreen({ events, calYear, calMonth, setCalYear, setCalMonth, se
 }
 
 function EventCard({ ev, isFull, onClick }) {
-  const attending = ev.attendees.filter(a=>a.status==="参加").length;
-  const cap = ev.capacity ?? 0;
+  const capM = ev.capacityMale ?? 0;
+  const capF = ev.capacityFemale ?? 0;
+  const maleCount   = ev.attendees.filter(a=>a.status==="参加"&&a.gender==="男性").length;
+  const femaleCount = ev.attendees.filter(a=>a.status==="参加"&&a.gender==="女性").length;
   return (
     <div style={{...S.eventCard, borderLeft:`4px solid ${isFull?"#EF4444":ev.color}`}} onClick={onClick}>
       <div style={S.eventCardLeft}>
@@ -379,7 +409,7 @@ function EventCard({ ev, isFull, onClick }) {
         </div>
         <div style={S.eventCardMeta}>{fmt(ev.date)} {ev.time}〜 📍{ev.place}</div>
         <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
-          👥 {attending}{cap>0?`/${cap}名`:"名"}参加
+          👨 {maleCount}{capM>0?`/${capM}名`:"名"} 👩 {femaleCount}{capF>0?`/${capF}名`:"名"}
         </div>
       </div>
     </div>
@@ -392,8 +422,12 @@ function EventScreen({ event, lineUser, admin, onBack, onRespond, onCancelRespon
   const attending = event.attendees.filter(a=>a.status==="参加");
   const absent    = event.attendees.filter(a=>a.status==="欠席");
   const undecided = event.attendees.filter(a=>a.status==="未定");
-  const cap       = event.capacity ?? 0;
-  const remaining = cap > 0 ? cap - attending.length : null;
+  const capM = event.capacityMale  ?? 0;
+  const capF = event.capacityFemale ?? 0;
+  const maleAttending   = attending.filter(a=>a.gender==="男性");
+  const femaleAttending = attending.filter(a=>a.gender==="女性");
+  const remM = capM > 0 ? capM - maleAttending.length : null;
+  const remF = capF > 0 ? capF - femaleAttending.length : null;
   const myEntry   = lineUser && event.attendees.find(a => a.lineId === lineUser.userId);
 
   return (
@@ -410,18 +444,36 @@ function EventScreen({ event, lineUser, admin, onBack, onRespond, onCancelRespon
         <div style={S.eventHeaderMeta}>📍 {event.place}</div>
       </div>
 
-      {/* 定員バー（定員0=無制限の場合は非表示） */}
-      {cap > 0 && (
+      {/* 男女別定員バー */}
+      {(capM > 0 || capF > 0) && (
         <div style={S.capacityStrip}>
-          <div style={S.capBar}>
-            <div style={{...S.capFill, width:`${Math.min(100,(attending.length/cap)*100)}%`, background:remaining<=0?"#EF4444":event.color}}/>
-          </div>
-          <div style={S.capNums}>
-            <span style={{color:event.color,fontWeight:700}}>{attending.length}名参加</span>
-            <span style={{color:"#aaa"}}> / {cap}名定員</span>
-            {remaining<=0
-              ? <span style={{marginLeft:"auto",color:"#EF4444",fontWeight:700}}>満員</span>
-              : <span style={{marginLeft:"auto",color:remaining<=5?"#EF4444":"#666",fontWeight:600}}>残{remaining}席</span>}
+          <div style={{display:"flex",gap:12}}>
+            {capM > 0 && (
+              <div style={{flex:1}}>
+                <div style={{fontSize:11,color:"#3B82F6",fontWeight:700,marginBottom:3}}>
+                  👨 男性 {maleAttending.length}/{capM}名
+                  {remM<=0 && <span style={{color:"#EF4444",marginLeft:6}}>満員</span>}
+                  {remM>0 && remM<=5 && <span style={{color:"#EF4444",marginLeft:6}}>残{remM}席</span>}
+                  {remM>5 && <span style={{color:"#888",marginLeft:6}}>残{remM}席</span>}
+                </div>
+                <div style={S.capBar}>
+                  <div style={{...S.capFill, width:`${Math.min(100,(maleAttending.length/capM)*100)}%`, background:remM<=0?"#EF4444":"#3B82F6"}}/>
+                </div>
+              </div>
+            )}
+            {capF > 0 && (
+              <div style={{flex:1}}>
+                <div style={{fontSize:11,color:"#EC4899",fontWeight:700,marginBottom:3}}>
+                  👩 女性 {femaleAttending.length}/{capF}名
+                  {remF<=0 && <span style={{color:"#EF4444",marginLeft:6}}>満員</span>}
+                  {remF>0 && remF<=5 && <span style={{color:"#EF4444",marginLeft:6}}>残{remF}席</span>}
+                  {remF>5 && <span style={{color:"#888",marginLeft:6}}>残{remF}席</span>}
+                </div>
+                <div style={S.capBar}>
+                  <div style={{...S.capFill, width:`${Math.min(100,(femaleAttending.length/capF)*100)}%`, background:remF<=0?"#EF4444":"#EC4899"}}/>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -439,8 +491,10 @@ function EventScreen({ event, lineUser, admin, onBack, onRespond, onCancelRespon
           <div style={{padding:"12px 16px"}}>
             <InfoRow icon="🕐" label="時間" value={`${event.time} 〜 ${event.endTime}`} />
             <InfoRow icon="📍" label="場所" value={event.place} />
-            {cap > 0 && <InfoRow icon="👥" label="定員" value={`${cap}名`} />}
-            {cap === 0 && <InfoRow icon="👥" label="定員" value="制限なし" />}
+            {capM > 0 && <InfoRow icon="👨" label="男性定員" value={`${capM}名`} />}
+            {capM === 0 && <InfoRow icon="👨" label="男性定員" value="制限なし" />}
+            {capF > 0 && <InfoRow icon="👩" label="女性定員" value={`${capF}名`} />}
+            {capF === 0 && <InfoRow icon="👩" label="女性定員" value="制限なし" />}
             <InfoRow icon="⏰" label="締切" value={fmt(event.deadline)} />
             {event.note && <InfoRow icon="📝" label="備考" value={event.note} />}
             <div style={S.summaryCards}>
@@ -462,6 +516,9 @@ function EventScreen({ event, lineUser, admin, onBack, onRespond, onCancelRespon
                     : <div style={{...S.aAvatar,background:STATUS_META[myEntry.status].bg,width:36,height:36}}>{myEntry.name[0]}</div>}
                   <div style={{flex:1}}>
                     <div style={{fontSize:14,fontWeight:700}}>{myEntry.name}</div>
+                    <div style={{fontSize:11,color:myEntry.gender==="男性"?"#3B82F6":"#EC4899",fontWeight:600}}>
+                      {myEntry.gender==="男性"?"👨":"👩"} {myEntry.gender}
+                    </div>
                     <div style={{fontSize:11,color:"#888"}}>🕐 {fmtFull(new Date(myEntry.time))}</div>
                   </div>
                   <div style={S.aPill(myEntry.status)}>{myEntry.status}</div>
@@ -482,7 +539,7 @@ function EventScreen({ event, lineUser, admin, onBack, onRespond, onCancelRespon
           </div>
         )}
         {tab==="list" && (
-          <AttendeeList attendees={event.attendees} cap={cap} newHighlight={newHighlight} color={event.color} lineUserId={lineUser?.userId} />
+          <AttendeeList attendees={event.attendees} capM={capM} capF={capF} newHighlight={newHighlight} color={event.color} lineUserId={lineUser?.userId} />
         )}
       </div>
     </div>
@@ -499,18 +556,23 @@ function InfoRow({ icon, label, value }) {
   );
 }
 
-function AttendeeList({ attendees, cap, newHighlight, color, lineUserId }) {
-  const sorted      = [...attendees].sort((a,b)=>new Date(a.time)-new Date(b.time));
-  const participants = sorted.filter(a=>a.status==="参加");
+function AttendeeList({ attendees, capM, capF, newHighlight, color, lineUserId }) {
+  const sorted           = [...attendees].sort((a,b)=>new Date(a.time)-new Date(b.time));
+  const maleParticipants = sorted.filter(a=>a.status==="参加"&&a.gender==="男性");
+  const femParticipants  = sorted.filter(a=>a.status==="参加"&&a.gender==="女性");
   return (
     <div style={{padding:"8px 12px"}}>
       <div style={S.listSectionLabel}>回答一覧（先着順）</div>
       {sorted.length===0 && <div style={S.calEmpty}>まだ回答がありません</div>}
       {sorted.map((a,i) => {
-        const rank   = participants.indexOf(a);
-        const isOver = a.status==="参加" && cap > 0 && rank >= cap;
-        const isHL   = a.lineId === newHighlight;
-        const isMe   = a.lineId === lineUserId;
+        const isMale  = a.gender === "男性";
+        const rankArr = isMale ? maleParticipants : femParticipants;
+        const cap     = isMale ? capM : capF;
+        const rank    = rankArr.indexOf(a);
+        const isOver  = a.status==="参加" && cap > 0 && rank >= cap;
+        const isHL    = a.lineId === newHighlight;
+        const isMe    = a.lineId === lineUserId;
+        const genderColor = isMale ? "#3B82F6" : "#EC4899";
         return (
           <div key={a.lineId} style={{...S.attendeeRow,
             background:isHL?"#fffde7":isMe?"#f0fdf4":"#fff",
@@ -524,7 +586,10 @@ function AttendeeList({ attendees, cap, newHighlight, color, lineUserId }) {
                 {a.name}
                 {isMe && <span style={{...S.badge,background:"#00B900"}}>自分</span>}
               </div>
-              <div style={{fontSize:10,color:"#aaa",marginTop:2}}>🕐 {fmtFull(new Date(a.time))}</div>
+              <div style={{display:"flex",gap:6,alignItems:"center",marginTop:2}}>
+                <span style={{fontSize:10,color:genderColor,fontWeight:600}}>{a.gender==="男性"?"👨":"👩"} {a.gender}</span>
+                <span style={{fontSize:10,color:"#aaa"}}>🕐 {fmtFull(new Date(a.time))}</span>
+              </div>
             </div>
             <div style={S.aPill(a.status)}>{a.status==="参加"&&isOver?"補欠":a.status}</div>
             {a.status==="参加"&&!isOver&&rank<3&&(
@@ -539,13 +604,19 @@ function AttendeeList({ attendees, cap, newHighlight, color, lineUserId }) {
 
 // ─── Respond Screen ────────────────────────────────────────
 function RespondScreen({ event, lineUser, form, setForm, onSubmit, onBack }) {
-  const myEntry   = lineUser && event.attendees.find(a => a.lineId === lineUser.userId);
-  const attending = event.attendees.filter(a=>a.status==="参加").length;
-  const cap       = event.capacity ?? 0;
-  // 自分が参加中なら自分の席を除外して残席計算
-  const myIsAttending = myEntry?.status === "参加";
-  const remaining = cap > 0 ? cap - attending + (myIsAttending ? 1 : 0) : null;
-  const isFull    = remaining !== null && remaining <= 0;
+  const myEntry  = lineUser && event.attendees.find(a => a.lineId === lineUser.userId);
+  const capM     = event.capacityMale  ?? 0;
+  const capF     = event.capacityFemale ?? 0;
+  const maleCount   = event.attendees.filter(a=>a.status==="参加"&&a.gender==="男性").length;
+  const femaleCount = event.attendees.filter(a=>a.status==="参加"&&a.gender==="女性").length;
+  // 自分が同性で参加中なら自分の席を除外
+  const myIsMale    = myEntry?.gender==="男性" && myEntry?.status==="参加";
+  const myIsFemale  = myEntry?.gender==="女性" && myEntry?.status==="参加";
+  const remM = capM > 0 ? capM - maleCount   + (myIsMale   ? 1 : 0) : null;
+  const remF = capF > 0 ? capF - femaleCount + (myIsFemale ? 1 : 0) : null;
+  const myRem   = form.gender==="男性" ? remM : form.gender==="女性" ? remF : null;
+  const myFull  = myRem !== null && myRem <= 0;
+  const canSubmit = form.gender !== "";
 
   return (
     <div style={S.screen}>
@@ -569,6 +640,19 @@ function RespondScreen({ event, lineUser, form, setForm, onSubmit, onBack }) {
           </div>
         </div>
 
+        <label style={S.formLabel}>性別 <span style={{color:"#EF4444"}}>*必須</span></label>
+        <div style={{display:"flex",gap:8,marginBottom:16}}>
+          {[["男性","#3B82F6","👨"],["女性","#EC4899","👩"]].map(([g,c,icon])=>(
+            <button key={g} style={{...S.statusBtn, flex:1,
+              background:form.gender===g?c:"#f3f4f6",
+              color:form.gender===g?"#fff":"#555",
+              border:`2px solid ${form.gender===g?c:"#e5e7eb"}`}}
+              onClick={()=>setForm({...form,gender:g})}>
+              {icon} {g}
+            </button>
+          ))}
+        </div>
+
         <label style={S.formLabel}>出欠を選択してください</label>
         <div style={S.statusBtns}>
           {["参加","欠席","未定"].map(s=>(
@@ -582,17 +666,21 @@ function RespondScreen({ event, lineUser, form, setForm, onSubmit, onBack }) {
           ))}
         </div>
 
-        {form.status==="参加" && remaining!==null && remaining<=5 && remaining>0 && (
-          <div style={S.warnBox}>⚠️ 残席わずか！（残{remaining}席）</div>
+        {form.status==="参加" && form.gender && myRem!==null && myRem<=5 && myRem>0 && (
+          <div style={S.warnBox}>⚠️ {form.gender}の残席わずか！（残{myRem}席）</div>
         )}
-        {form.status==="参加" && isFull && (
-          <div style={{...S.warnBox,background:"#fee2e2",borderColor:"#EF4444"}}>😢 定員に達しています。補欠登録になります。</div>
+        {form.status==="参加" && form.gender && myFull && (
+          <div style={{...S.warnBox,background:"#fee2e2",borderColor:"#EF4444"}}>😢 {form.gender}の定員に達しています。補欠登録になります。</div>
         )}
         {myEntry && myEntry.status==="欠席" && form.status==="参加" && (
           <div style={{...S.warnBox,background:"#eff6ff",borderColor:"#3B82F6"}}>ℹ️ 欠席→参加の変更は先着順の最後尾になります。</div>
         )}
+        {!form.gender && (
+          <div style={S.warnBox}>⚠️ 性別を選択してください</div>
+        )}
 
-        <button style={{...S.respondBtn,background:event.color,marginTop:20}} onClick={onSubmit}>
+        <button style={{...S.respondBtn,background:canSubmit?event.color:"#ccc",marginTop:12}}
+          onClick={onSubmit} disabled={!canSubmit}>
           {myEntry ? "更新する" : "送信する"}
         </button>
       </div>
@@ -631,11 +719,19 @@ function EditScreen({ form, setForm, isNew, onSubmit, onBack }) {
         <Field label="場所">
           <input style={S.formInput} placeholder="例：渋谷 居酒屋「葵」" value={form.place} onChange={e=>setForm({...form,place:e.target.value})} />
         </Field>
-        <Field label="定員（0=制限なし）">
-          <input type="number" style={S.formInput} value={form.capacity} min={0}
-            onChange={e=>setForm({...form,capacity:Math.max(0,parseInt(e.target.value)||0)})} />
-          <div style={{fontSize:11,color:"#888",marginTop:4}}>※ 0に設定すると定員制限なしになります</div>
-        </Field>
+        <div style={{display:"flex",gap:8}}>
+          <Field label="👨 男性定員（0=無制限）" style={{flex:1}}>
+            <input type="number" style={{...S.formInput,borderColor:"#3B82F6"}}
+              value={form.capacityMale??0} min={0}
+              onChange={e=>setForm({...form,capacityMale:Math.max(0,parseInt(e.target.value)||0)})} />
+          </Field>
+          <Field label="👩 女性定員（0=無制限）" style={{flex:1}}>
+            <input type="number" style={{...S.formInput,borderColor:"#EC4899"}}
+              value={form.capacityFemale??0} min={0}
+              onChange={e=>setForm({...form,capacityFemale:Math.max(0,parseInt(e.target.value)||0)})} />
+          </Field>
+        </div>
+        <div style={{fontSize:11,color:"#888",marginTop:-8}}>※ 0に設定すると定員制限なしになります</div>
         <Field label="回答締切">
           <input type="date" style={S.formInput} value={deadlineStr} onChange={e=>setForm({...form,deadline:new Date(e.target.value+"T00:00:00")})} />
         </Field>
