@@ -30,13 +30,11 @@ const LIFF_ID = "2010363752-4LQd8e8T";
 const GROUP_PATH = "stinger_circle"; // ← このファイルに応じて変更
 
 // ──────────────────────────────────────────────────────────
-// 🔑 管理者権限を持つLINEユーザーIDのリスト
-// LINE Developers コンソール or liff.getProfile() で確認できる userId を追加
+// 🔑 管理者パスワード
+// このパスワードを知っている人が管理者になれます
+// 変更したい場合はここを書き換えてデプロイするだけでOK
 // ──────────────────────────────────────────────────────────
-const ADMIN_USER_IDS = [
-  "U25197b4f80498df9bc15a503c97b66f4", // 管理者1
-  "Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", // 管理者2（複数人可）
-];
+const ADMIN_PASSWORD = "stingeradmin"; // ← 好きなパスワードに変更
 
 // ──────────────────────────────────────────────────────────
 const TODAY = new Date();
@@ -51,9 +49,7 @@ const GENDER_META = {
   女性: { bg: "#EC4899", light: "#fdf2f8", icon: "👩" },
 };
 
-function isAdmin(userId) {
-  return ADMIN_USER_IDS.includes(userId);
-}
+// isAdmin は App コンポーネント内の adminIds state で管理
 function toLocalDateStr(d) {
   const dt = d instanceof Date ? d : new Date(d);
   return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
@@ -94,6 +90,8 @@ export default function App() {
   const [loading,       setLoading]       = useState(true);
   const [liffReady,     setLiffReady]     = useState(false);
   const [lineUser,      setLineUser]      = useState(null);
+  const [adminIds,      setAdminIds]      = useState([]); // Firebaseから取得した管理者IDリスト
+  const [showAdminModal,setShowAdminModal]= useState(false); // 管理者パスワード入力モーダル
   const [screen,        setScreen]        = useState("calendar");
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [calYear,       setCalYear]       = useState(TODAY.getFullYear());
@@ -150,6 +148,29 @@ export default function App() {
     });
     return () => unsub();
   }, []);
+
+  // 管理者リストをFirebaseからリアルタイム同期
+  useEffect(() => {
+    const unsub = onValue(ref(db, `${GROUP_PATH}/admins`), (snapshot) => {
+      const data = snapshot.val();
+      setAdminIds(data ? Object.keys(data) : []);
+    });
+    return () => unsub();
+  }, []);
+
+  // パスワード認証して管理者登録
+  const submitAdminPassword = async (password) => {
+    if (password !== ADMIN_PASSWORD) {
+      showToast("❌ パスワードが違います");
+      return;
+    }
+    await set(ref(db, `${GROUP_PATH}/admins/${lineUser.userId}`), {
+      name:        lineUser.displayName,
+      registeredAt: new Date().toISOString(),
+    });
+    setShowAdminModal(false);
+    showToast("👑 管理者権限が付与されました！");
+  };
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
 
@@ -251,7 +272,7 @@ export default function App() {
     setScreen("newEvent");
   };
 
-  const admin = isAdmin(lineUser?.userId);
+  const admin = lineUser ? adminIds.includes(lineUser.userId) : false;
 
   // LIFFエラー時（lineUserがnullのまま準備完了した場合）
   if (liffReady && !lineUser) return (
@@ -310,17 +331,26 @@ export default function App() {
           {admin
             ? <NavBtn icon="➕" label="新規作成" active={false} onClick={() => openNewEvent(null)} isPlus />
             : <div style={{flex:1}}/>}
-          <div style={S.navUserArea}>
+          <div style={S.navUserArea} onClick={() => !admin && setShowAdminModal(true)}>
             {lineUser?.pictureUrl
               ? <img src={lineUser.pictureUrl} style={S.navUserImg} alt="me" />
               : <div style={S.navUserInitial}>{lineUser?.displayName?.[0]}</div>}
-            <span style={{fontSize:9,color:"#888",marginTop:1,maxWidth:60,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-              {admin ? "👑 " : ""}{lineUser?.displayName}
+            <span style={{fontSize:9,color:admin?"#00B900":"#888",marginTop:1,maxWidth:60,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontWeight:admin?700:400}}>
+              {admin ? "👑管理者" : "🔑権限取得"}
             </span>
           </div>
         </div>
 
         {toast && <div style={S.toast}>{toast}</div>}
+
+        {/* 管理者パスワード入力モーダル */}
+        {showAdminModal && (
+          <AdminPasswordModal
+            onSubmit={submitAdminPassword}
+            onClose={() => setShowAdminModal(false)}
+            showToast={showToast}
+          />
+        )}
       </div>
     </div>
   );
@@ -345,11 +375,11 @@ function CalendarScreen({ events, calYear, calMonth, setCalYear, setCalMonth, se
   const isFull = (ev) => {
     const capM = ev.capacityMale ?? 0;
     const capF = ev.capacityFemale ?? 0;
-    if (capM === 0 && capF === 0) return false;
+    if (capM === 0 && capF === 0) return true; // 両方0=受付停止→満員扱い
     const maleCount   = ev.attendees.filter(a=>a.status==="参加"&&a.gender==="男性").length;
     const femaleCount = ev.attendees.filter(a=>a.status==="参加"&&a.gender==="女性").length;
-    const maleOk   = capM === 0 || maleCount < capM;
-    const femaleOk = capF === 0 || femaleCount < capF;
+    const maleOk   = capM === 0 ? false : maleCount < capM;   // 0=受付停止
+    const femaleOk = capF === 0 ? false : femaleCount < capF; // 0=受付停止
     return !maleOk && !femaleOk;
   };
   const selectedEvents = selectedDate
@@ -449,8 +479,8 @@ function EventScreen({ event, lineUser, admin, onBack, onRespond, onCancelRespon
   const capF = event.capacityFemale ?? 0;
   const maleAttending   = attending.filter(a=>a.gender==="男性");
   const femaleAttending = attending.filter(a=>a.gender==="女性");
-  const remM = capM > 0 ? capM - maleAttending.length : null;
-  const remF = capF > 0 ? capF - femaleAttending.length : null;
+  const remM = capM === 0 ? 0 : capM - maleAttending.length;   // 0=受付停止→満員
+  const remF = capF === 0 ? 0 : capF - femaleAttending.length; // 0=受付停止→満員
   const myEntry   = lineUser && event.attendees.find(a => a.lineId === lineUser.userId);
 
   return (
@@ -635,8 +665,8 @@ function RespondScreen({ event, lineUser, form, setForm, onSubmit, onBack }) {
   // 自分が同性で参加中なら自分の席を除外
   const myIsMale    = myEntry?.gender==="男性" && myEntry?.status==="参加";
   const myIsFemale  = myEntry?.gender==="女性" && myEntry?.status==="参加";
-  const remM = capM > 0 ? capM - maleCount   + (myIsMale   ? 1 : 0) : null;
-  const remF = capF > 0 ? capF - femaleCount + (myIsFemale ? 1 : 0) : null;
+  const remM = capM === 0 ? 0 : capM - maleCount   + (myIsMale   ? 1 : 0);   // 0=受付停止→満員
+  const remF = capF === 0 ? 0 : capF - femaleCount + (myIsFemale ? 1 : 0); // 0=受付停止→満員
   const myRem   = form.gender==="男性" ? remM : form.gender==="女性" ? remF : null;
   const myFull  = myRem !== null && myRem <= 0;
   const canSubmit = form.gender !== "";
@@ -785,6 +815,38 @@ function Field({ label, children, required, style }) {
   );
 }
 
+// ─── Admin Password Modal ─────────────────────────────────
+function AdminPasswordModal({ onSubmit, onClose, showToast }) {
+  const [password, setPassword] = useState("");
+  return (
+    <div style={S.modalOverlay}>
+      <div style={S.modalCard}>
+        <div style={S.modalTitle}>🔑 管理者パスワード</div>
+        <div style={{fontSize:12,color:"#888",marginBottom:16,lineHeight:1.6}}>
+          管理者パスワードを入力すると<br/>イベントの作成・編集・削除ができます
+        </div>
+        <input
+          type="password"
+          style={{...S.formInput, marginBottom:12}}
+          placeholder="パスワードを入力"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          onKeyDown={e => e.key==="Enter" && onSubmit(password)}
+          autoFocus
+        />
+        <button
+          style={{...S.respondBtn, background: password ? "#00B900" : "#ccc", marginBottom:8}}
+          onClick={() => onSubmit(password)}
+          disabled={!password}
+        >
+          認証する
+        </button>
+        <button style={S.cancelResponseBtn} onClick={onClose}>キャンセル</button>
+      </div>
+    </div>
+  );
+}
+
 function NavBtn({ icon, label, active, onClick, isPlus }) {
   return (
     <button style={{...S.navBtn,color:active?"#00B900":"#aaa"}} onClick={onClick}>
@@ -868,5 +930,8 @@ const S = {
   navUserImg:{ width:28, height:28, borderRadius:"50%", objectFit:"cover" },
   navUserInitial:{ width:28, height:28, borderRadius:"50%", background:"#00B900", color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700 },
   plusCircle:{ width:38, height:38, borderRadius:"50%", background:"#00B900", color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontSize:20, boxShadow:"0 2px 8px rgba(0,185,0,0.35)" },
+  modalOverlay:{ position:"absolute", inset:0, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200, borderRadius:40 },
+  modalCard:{ background:"#fff", borderRadius:20, padding:"24px 20px", width:300, display:"flex", flexDirection:"column" },
+  modalTitle:{ fontWeight:800, fontSize:17, color:"#333", marginBottom:8, textAlign:"center" },
   toast:{ position:"absolute", bottom:80, left:"50%", transform:"translateX(-50%)", background:"rgba(0,0,0,0.75)", color:"#fff", borderRadius:20, padding:"8px 20px", fontSize:13, whiteSpace:"nowrap", zIndex:100 },
 };
