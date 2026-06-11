@@ -49,7 +49,7 @@ const GENDER_META = {
   女性: { bg: "#EC4899", light: "#fdf2f8", icon: "👩" },
 };
 
-// isAdmin は App コンポーネント内の adminIds state で管理
+// isAdmin は App 内の checkAdmin() を使用
 function toLocalDateStr(d) {
   const dt = d instanceof Date ? d : new Date(d);
   return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
@@ -230,7 +230,7 @@ export default function App() {
 
   // イベント編集保存（管理者のみ）
   const submitEdit = async () => {
-    if (!editForm.title.trim() || !isAdmin(lineUser?.userId)) return;
+    if (!editForm.title.trim() || !adminIds.includes(lineUser?.userId)) return;
     await set(ref(db, `${GROUP_PATH}/events/${editForm.fbKey}`), serializeEvent(editForm));
     showToast("📝 保存しました！");
     setScreen("event");
@@ -238,7 +238,7 @@ export default function App() {
 
   // 新規イベント作成（管理者のみ）
   const submitNewEvent = async () => {
-    if (!editForm.title.trim() || !isAdmin(lineUser?.userId)) return;
+    if (!editForm.title.trim() || !adminIds.includes(lineUser?.userId)) return;
     await push(ref(db, `${GROUP_PATH}/events`), serializeEvent({ ...editForm, id: Date.now(), attendees: [] }));
     showToast("🎉 イベントを作成しました！");
     setScreen("calendar");
@@ -246,14 +246,14 @@ export default function App() {
 
   // イベント削除（管理者のみ）
   const deleteEvent = async (fbKey) => {
-    if (!isAdmin(lineUser?.userId)) return;
+    if (!adminIds.includes(lineUser?.userId)) return;
     await remove(ref(db, `${GROUP_PATH}/events/${fbKey}`));
     showToast("🗑️ 削除しました");
     setScreen("calendar");
   };
 
   const openEdit = (ev) => {
-    if (!isAdmin(lineUser?.userId)) return;
+    if (!adminIds.includes(lineUser?.userId)) return;
     setEditForm({
       ...ev,
       date: new Date(ev.date),
@@ -265,7 +265,7 @@ export default function App() {
   };
 
   const openNewEvent = (date) => {
-    if (!isAdmin(lineUser?.userId)) { showToast("⛔ 管理者のみ作成できます"); return; }
+    if (!adminIds.includes(lineUser?.userId)) { showToast("⛔ 管理者のみ作成できます"); return; }
     const base = date || new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate());
     setEditForm({ id: null, title: "", date: base, time: "19:00", endTime: "21:00",
       place: "", capacityMale: 10, capacityFemale: 10, deadline: base, note: "", color: "#00B900" });
