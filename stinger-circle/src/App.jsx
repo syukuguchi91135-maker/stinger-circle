@@ -175,6 +175,8 @@ export default function App() {
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
 
   const openEvent = (ev) => {
+    // 管理者限定イベントは非管理者が開けないようガード（UI上は既に非表示だが念のため二重防御）
+    if (ev.adminOnly && !adminIds.includes(lineUser?.userId)) return;
     setSelectedEvent(ev);
     const myEntry = lineUser && ev.attendees.find(a => a.lineId === lineUser.userId);
     setRespondForm({ status: myEntry ? myEntry.status : "参加", gender: myEntry ? myEntry.gender || "" : "" });
@@ -260,6 +262,9 @@ export default function App() {
       deadline: new Date(ev.deadline),
       capacityMale:   ev.capacityMale   ?? 10,
       capacityFemale: ev.capacityFemale ?? 10,
+      fee:            ev.fee            ?? 500,
+      venueCost:      ev.venueCost      ?? 0,
+      adminOnly:      ev.adminOnly      ?? false,
     });
     setScreen("edit");
   };
@@ -268,7 +273,8 @@ export default function App() {
     if (!adminIds.includes(lineUser?.userId)) { showToast("⛔ 管理者のみ作成できます"); return; }
     const base = date || new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate());
     setEditForm({ id: null, title: "", date: base, time: "19:00", endTime: "21:00",
-      place: "", capacityMale: 10, capacityFemale: 10, deadline: base, note: "", color: "#00B900" });
+      place: "", capacityMale: 10, capacityFemale: 10, deadline: base, note: "", color: "#00B900",
+      fee: 500, venueCost: 0, adminOnly: false });
     setScreen("newEvent");
   };
 
@@ -320,6 +326,9 @@ export default function App() {
             form={respondForm} setForm={setRespondForm}
             onSubmit={submitResponse} onBack={() => setScreen("event")} />
         )}
+        {screen === "finance" && admin && (
+          <FinanceScreen events={events} onOpenEvent={openEvent} />
+        )}
         {(screen === "edit" || screen === "newEvent") && editForm && admin && (
           <EditScreen form={editForm} setForm={setEditForm} isNew={screen === "newEvent"}
             onSubmit={screen === "newEvent" ? submitNewEvent : submitEdit}
@@ -331,6 +340,7 @@ export default function App() {
           {admin
             ? <NavBtn icon="➕" label="新規作成" active={false} onClick={() => openNewEvent(null)} isPlus />
             : <div style={{flex:1}}/>}
+          {admin && <NavBtn icon="📊" label="収支" active={screen==="finance"} onClick={() => setScreen("finance")} />}
           <div style={S.navUserArea} onClick={() => !admin && setShowAdminModal(true)}>
             {lineUser?.pictureUrl
               ? <img src={lineUser.pictureUrl} style={S.navUserImg} alt="me" />
@@ -358,6 +368,9 @@ export default function App() {
 
 // ─── Calendar Screen ───────────────────────────────────────
 function CalendarScreen({ events, calYear, calMonth, setCalYear, setCalMonth, selectedDate, setSelectedDate, onOpenEvent, onNewEvent, admin }) {
+  // 管理者限定イベントは非管理者には一切表示しない
+  const visibleEvents = admin ? events : events.filter(e => !e.adminOnly);
+
   const firstDay    = new Date(calYear, calMonth, 1).getDay();
   const daysInMonth = new Date(calYear, calMonth+1, 0).getDate();
   const weeks = [];
@@ -368,7 +381,7 @@ function CalendarScreen({ events, calYear, calMonth, setCalYear, setCalMonth, se
     weeks.push(week);
     if (day > daysInMonth) break;
   }
-  const eventsOnDay = (d) => events.filter(e => {
+  const eventsOnDay = (d) => visibleEvents.filter(e => {
     const ed = new Date(e.date);
     return ed.getFullYear()===calYear && ed.getMonth()===calMonth && ed.getDate()===d;
   });
@@ -383,7 +396,7 @@ function CalendarScreen({ events, calYear, calMonth, setCalYear, setCalMonth, se
     return !maleOk && !femaleOk;
   };
   const selectedEvents = selectedDate
-    ? events.filter(e => { const ed=new Date(e.date); return ed.getFullYear()===calYear && ed.getMonth()===calMonth && ed.getDate()===selectedDate; })
+    ? visibleEvents.filter(e => { const ed=new Date(e.date); return ed.getFullYear()===calYear && ed.getMonth()===calMonth && ed.getDate()===selectedDate; })
     : [];
   const prevMonth = () => calMonth===0 ? (setCalMonth(11), setCalYear(y=>y-1)) : setCalMonth(m=>m-1);
   const nextMonth = () => calMonth===11 ? (setCalMonth(0), setCalYear(y=>y+1)) : setCalMonth(m=>m+1);
@@ -438,7 +451,7 @@ function CalendarScreen({ events, calYear, calMonth, setCalYear, setCalMonth, se
         ) : (
           <div>
             <div style={S.calEventListHeader}><span style={S.calEventListDate}>今後のイベント</span></div>
-            {events
+            {visibleEvents
               .filter(e => new Date(e.date) >= new Date(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate()))
               .map(ev => <EventCard key={ev.fbKey||ev.id} ev={ev} isFull={isFull(ev)} onClick={() => onOpenEvent(ev)} />)}
           </div>
@@ -458,6 +471,7 @@ function EventCard({ ev, isFull, onClick }) {
       <div style={S.eventCardLeft}>
         <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
           <span style={S.eventCardTitle}>{ev.title}</span>
+          {ev.adminOnly && <span style={S.lockBadge}>🔒管理者限定</span>}
           {isFull && <span style={S.fullBadge}>満員</span>}
         </div>
         <div style={S.eventCardMeta}>{fmt(ev.date)} {ev.time}〜 📍{ev.place}</div>
@@ -495,6 +509,9 @@ function EventScreen({ event, lineUser, admin, onBack, onRespond, onCancelRespon
         </div>
         <div style={S.eventHeaderMeta}>📅 {fmt(event.date)} {event.time}〜{event.endTime}</div>
         <div style={S.eventHeaderMeta}>📍 {event.place}</div>
+        {event.adminOnly && (
+          <div style={{marginTop:6}}><span style={S.lockBadge}>🔒 管理者限定公開</span></div>
+        )}
       </div>
 
       {/* 男女別定員バー */}
@@ -549,6 +566,7 @@ function EventScreen({ event, lineUser, admin, onBack, onRespond, onCancelRespon
             {capF > 0 && <InfoRow icon="👩" label="女性定員" value={`${capF}名`} />}
             {capF === 0 && <InfoRow icon="👩" label="女性定員" value="制限なし" />}
             <InfoRow icon="⏰" label="締切" value={fmt(event.deadline)} />
+            {(event.fee ?? 0) > 0 && <InfoRow icon="💴" label="参加費" value={`${(event.fee).toLocaleString()}円`} />}
             {event.note && <InfoRow icon="📝" label="備考" value={event.note} />}
             <div style={S.summaryCards}>
               {[["参加",attending.length,"#00B900"],["欠席",absent.length,"#EF4444"],["未定",undecided.length,"#9CA3AF"]].map(([l,c,col])=>(
@@ -610,9 +628,16 @@ function InfoRow({ icon, label, value }) {
 }
 
 function AttendeeList({ attendees, capM, capF, newHighlight, color, lineUserId }) {
-  const sorted           = [...attendees].sort((a,b)=>new Date(a.time)-new Date(b.time));
-  const maleParticipants = sorted.filter(a=>a.status==="参加"&&a.gender==="男性");
-  const femParticipants  = sorted.filter(a=>a.status==="参加"&&a.gender==="女性");
+  const byTime = [...attendees].sort((a,b)=>new Date(a.time)-new Date(b.time));
+  const maleParticipants = byTime.filter(a=>a.status==="参加"&&a.gender==="男性");
+  const femParticipants  = byTime.filter(a=>a.status==="参加"&&a.gender==="女性");
+  // 表示順：参加→欠席→未定、各グループ内は先着順（時刻順）
+  const STATUS_ORDER = { 参加: 0, 欠席: 1, 未定: 2 };
+  const sorted = [...byTime].sort((a,b) => {
+    const diff = STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
+    if (diff !== 0) return diff;
+    return new Date(a.time) - new Date(b.time);
+  });
   return (
     <div style={{padding:"8px 12px"}}>
       <div style={S.listSectionLabel}>回答一覧（先着順）</div>
@@ -788,9 +813,33 @@ function EditScreen({ form, setForm, isNew, onSubmit, onBack }) {
         <Field label="回答締切">
           <input type="date" style={S.formInput} value={deadlineStr} onChange={e=>setForm({...form,deadline:new Date(e.target.value+"T00:00:00")})} />
         </Field>
+        <div style={{display:"flex",gap:8}}>
+          <Field label="💴 参加費（円/人）" style={{flex:1}}>
+            <input type="number" style={S.formInput} value={form.fee??500} min={0}
+              onChange={e=>setForm({...form,fee:Math.max(0,parseInt(e.target.value)||0)})} />
+          </Field>
+          <Field label="🏠 場所代・その他経費（円）" style={{flex:1}}>
+            <input type="number" style={S.formInput} value={form.venueCost??0} min={0}
+              onChange={e=>setForm({...form,venueCost:Math.max(0,parseInt(e.target.value)||0)})} />
+          </Field>
+        </div>
         <Field label="備考">
           <textarea style={{...S.formInput,height:72,resize:"none"}} placeholder="例：参加費3,000円など" value={form.note} onChange={e=>setForm({...form,note:e.target.value})} />
         </Field>
+        <div style={S.adminOnlyBox}>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:700,fontSize:13,color:"#333"}}>🔒 管理者限定公開</div>
+            <div style={{fontSize:11,color:"#888",marginTop:2}}>
+              ONにすると、このイベントは管理者以外には表示されません
+            </div>
+          </div>
+          <button
+            style={{...S.toggleSwitch, background: form.adminOnly ? "#EF4444" : "#d1d5db"}}
+            onClick={() => setForm({...form, adminOnly: !form.adminOnly})}
+          >
+            <div style={{...S.toggleKnob, transform: form.adminOnly ? "translateX(20px)" : "translateX(2px)"}} />
+          </button>
+        </div>
         <Field label="カラー">
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             {EVENT_COLORS.map(c=>(
@@ -811,6 +860,109 @@ function Field({ label, children, required, style }) {
     <div style={style}>
       <label style={S.formLabel}>{label}{required&&<span style={{color:"#EF4444"}}> *</span>}</label>
       {children}
+    </div>
+  );
+}
+
+// ─── Finance Screen（収支管理・管理者のみ） ─────────────────
+function FinanceScreen({ events, onOpenEvent }) {
+  const [filterYear, setFilterYear] = useState(TODAY.getFullYear());
+
+  // イベントごとの収支を計算
+  const eventFinances = events
+    .filter(ev => new Date(ev.date).getFullYear() === filterYear)
+    .map(ev => {
+      const participants = ev.attendees.filter(a => a.status === "参加").length;
+      const fee       = ev.fee ?? 0;
+      const venueCost = ev.venueCost ?? 0;
+      const income    = participants * fee;
+      const profit    = income - venueCost;
+      return { ev, participants, fee, venueCost, income, profit };
+    })
+    .sort((a, b) => new Date(a.ev.date) - new Date(b.ev.date));
+
+  // 月別集計
+  const monthly = {};
+  eventFinances.forEach(f => {
+    const m = new Date(f.ev.date).getMonth() + 1;
+    if (!monthly[m]) monthly[m] = { income: 0, cost: 0, profit: 0, count: 0 };
+    monthly[m].income += f.income;
+    monthly[m].cost   += f.venueCost;
+    monthly[m].profit += f.profit;
+    monthly[m].count  += 1;
+  });
+
+  const totalProfit = eventFinances.reduce((s, f) => s + f.profit, 0);
+  const totalIncome = eventFinances.reduce((s, f) => s + f.income, 0);
+  const totalCost   = eventFinances.reduce((s, f) => s + f.venueCost, 0);
+  const yen = (n) => `${n < 0 ? "-" : ""}¥${Math.abs(n).toLocaleString()}`;
+
+  return (
+    <div style={S.screen}>
+      <div style={{...S.eventDetailHeader, background:"#1e3a5f", paddingBottom:14}}>
+        <div style={S.eventHeaderTop}>
+          <div style={{width:32}}/>
+          <div style={S.eventHeaderTitle}>📊 収支管理</div>
+          <div style={{width:32}}/>
+        </div>
+        <div style={{display:"flex",justifyContent:"center",gap:12,alignItems:"center"}}>
+          <button style={{...S.backBtn,fontSize:20}} onClick={()=>setFilterYear(y=>y-1)}>‹</button>
+          <span style={{fontSize:14,fontWeight:700}}>{filterYear}年</span>
+          <button style={{...S.backBtn,fontSize:20}} onClick={()=>setFilterYear(y=>y+1)}>›</button>
+        </div>
+      </div>
+
+      {/* 年間サマリー */}
+      <div style={{background:"#fff",padding:"14px 16px",borderBottom:"1px solid #e5e7eb"}}>
+        <div style={{display:"flex",gap:8}}>
+          <div style={{flex:1,textAlign:"center"}}>
+            <div style={{fontSize:10,color:"#888"}}>収入</div>
+            <div style={{fontSize:16,fontWeight:800,color:"#00B900"}}>{yen(totalIncome)}</div>
+          </div>
+          <div style={{flex:1,textAlign:"center"}}>
+            <div style={{fontSize:10,color:"#888"}}>経費</div>
+            <div style={{fontSize:16,fontWeight:800,color:"#EF4444"}}>{yen(-totalCost)}</div>
+          </div>
+          <div style={{flex:1,textAlign:"center",background:totalProfit>=0?"#f0fdf4":"#fef2f2",borderRadius:10,padding:"4px 0"}}>
+            <div style={{fontSize:10,color:"#888"}}>利益</div>
+            <div style={{fontSize:16,fontWeight:800,color:totalProfit>=0?"#00B900":"#EF4444"}}>{yen(totalProfit)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{flex:1,overflowY:"auto",padding:"10px 12px"}}>
+        {eventFinances.length === 0 && (
+          <div style={S.calEmpty}>この年のイベントはありません</div>
+        )}
+
+        {/* 月別グループ表示 */}
+        {Object.keys(monthly).sort((a,b)=>a-b).map(m => (
+          <div key={m} style={{marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 4px 6px"}}>
+              <span style={{fontSize:13,fontWeight:800,color:"#333"}}>{m}月</span>
+              <span style={{fontSize:12,fontWeight:700,color:monthly[m].profit>=0?"#00B900":"#EF4444"}}>
+                {yen(monthly[m].profit)}
+              </span>
+            </div>
+            {eventFinances
+              .filter(f => new Date(f.ev.date).getMonth()+1 === Number(m))
+              .map(f => (
+                <div key={f.ev.fbKey} style={{...S.eventCard, borderLeft:`4px solid ${f.ev.color}`, flexDirection:"column", alignItems:"stretch", gap:6}} onClick={()=>onOpenEvent(f.ev)}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span style={S.eventCardTitle}>{f.ev.title}</span>
+                    <span style={{fontSize:14,fontWeight:800,color:f.profit>=0?"#00B900":"#EF4444"}}>{yen(f.profit)}</span>
+                  </div>
+                  <div style={{fontSize:11,color:"#888"}}>{fmt(f.ev.date)} {f.ev.time}〜</div>
+                  <div style={{display:"flex",gap:4,fontSize:11,color:"#666",background:"#f9fafb",borderRadius:8,padding:"6px 8px"}}>
+                    <span>👥 {f.participants}名 × ¥{f.fee.toLocaleString()}</span>
+                    <span style={{color:"#00B900"}}>= {yen(f.income)}</span>
+                    <span style={{marginLeft:"auto",color:"#EF4444"}}>経費 {yen(-f.venueCost)}</span>
+                  </div>
+                </div>
+              ))}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -924,6 +1076,10 @@ const S = {
   statusBtn:{ flex:1, padding:"12px 0", borderRadius:10, fontSize:13, fontWeight:700, cursor:"pointer" },
   warnBox:{ background:"#fefce8", border:"1px solid #FCD34D", borderRadius:10, padding:"10px 12px", fontSize:12, color:"#666", marginBottom:8, lineHeight:1.5 },
   colorDot:{ width:28, height:28, borderRadius:"50%", border:"none", cursor:"pointer" },
+  adminOnlyBox:{ display:"flex", alignItems:"center", gap:10, background:"#fef2f2", border:"1px solid #fecaca", borderRadius:12, padding:"10px 12px" },
+  toggleSwitch:{ width:44, height:24, borderRadius:12, border:"none", cursor:"pointer", position:"relative", flexShrink:0, transition:"background 0.2s" },
+  toggleKnob:{ width:20, height:20, borderRadius:"50%", background:"#fff", position:"absolute", top:2, transition:"transform 0.2s", boxShadow:"0 1px 3px rgba(0,0,0,0.3)" },
+  lockBadge:{ background:"#EF4444", color:"#fff", borderRadius:8, padding:"1px 7px", fontSize:10, fontWeight:700 },
   bottomNav:{ background:"#fff", borderTop:"1px solid #e5e7eb", display:"flex", alignItems:"center", padding:"6px 0 4px" },
   navBtn:{ flex:1, background:"none", border:"none", display:"flex", flexDirection:"column", alignItems:"center", cursor:"pointer", padding:"2px 0" },
   navUserArea:{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:2 },
