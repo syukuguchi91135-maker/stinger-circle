@@ -326,9 +326,6 @@ export default function App() {
             form={respondForm} setForm={setRespondForm}
             onSubmit={submitResponse} onBack={() => setScreen("event")} />
         )}
-        {screen === "finance" && admin && (
-          <FinanceScreen events={events} onOpenEvent={openEvent} />
-        )}
         {(screen === "edit" || screen === "newEvent") && editForm && admin && (
           <EditScreen form={editForm} setForm={setEditForm} isNew={screen === "newEvent"}
             onSubmit={screen === "newEvent" ? submitNewEvent : submitEdit}
@@ -340,7 +337,6 @@ export default function App() {
           {admin
             ? <NavBtn icon="➕" label="新規作成" active={false} onClick={() => openNewEvent(null)} isPlus />
             : <div style={{flex:1}}/>}
-          {admin && <NavBtn icon="📊" label="収支" active={screen==="finance"} onClick={() => setScreen("finance")} />}
           <div style={S.navUserArea} onClick={() => !admin && setShowAdminModal(true)}>
             {lineUser?.pictureUrl
               ? <img src={lineUser.pictureUrl} style={S.navUserImg} alt="me" />
@@ -860,109 +856,6 @@ function Field({ label, children, required, style }) {
     <div style={style}>
       <label style={S.formLabel}>{label}{required&&<span style={{color:"#EF4444"}}> *</span>}</label>
       {children}
-    </div>
-  );
-}
-
-// ─── Finance Screen（収支管理・管理者のみ） ─────────────────
-function FinanceScreen({ events, onOpenEvent }) {
-  const [filterYear, setFilterYear] = useState(TODAY.getFullYear());
-
-  // イベントごとの収支を計算
-  const eventFinances = events
-    .filter(ev => new Date(ev.date).getFullYear() === filterYear)
-    .map(ev => {
-      const participants = ev.attendees.filter(a => a.status === "参加").length;
-      const fee       = ev.fee ?? 0;
-      const venueCost = ev.venueCost ?? 0;
-      const income    = participants * fee;
-      const profit    = income - venueCost;
-      return { ev, participants, fee, venueCost, income, profit };
-    })
-    .sort((a, b) => new Date(a.ev.date) - new Date(b.ev.date));
-
-  // 月別集計
-  const monthly = {};
-  eventFinances.forEach(f => {
-    const m = new Date(f.ev.date).getMonth() + 1;
-    if (!monthly[m]) monthly[m] = { income: 0, cost: 0, profit: 0, count: 0 };
-    monthly[m].income += f.income;
-    monthly[m].cost   += f.venueCost;
-    monthly[m].profit += f.profit;
-    monthly[m].count  += 1;
-  });
-
-  const totalProfit = eventFinances.reduce((s, f) => s + f.profit, 0);
-  const totalIncome = eventFinances.reduce((s, f) => s + f.income, 0);
-  const totalCost   = eventFinances.reduce((s, f) => s + f.venueCost, 0);
-  const yen = (n) => `${n < 0 ? "-" : ""}¥${Math.abs(n).toLocaleString()}`;
-
-  return (
-    <div style={S.screen}>
-      <div style={{...S.eventDetailHeader, background:"#1e3a5f", paddingBottom:14}}>
-        <div style={S.eventHeaderTop}>
-          <div style={{width:32}}/>
-          <div style={S.eventHeaderTitle}>📊 収支管理</div>
-          <div style={{width:32}}/>
-        </div>
-        <div style={{display:"flex",justifyContent:"center",gap:12,alignItems:"center"}}>
-          <button style={{...S.backBtn,fontSize:20}} onClick={()=>setFilterYear(y=>y-1)}>‹</button>
-          <span style={{fontSize:14,fontWeight:700}}>{filterYear}年</span>
-          <button style={{...S.backBtn,fontSize:20}} onClick={()=>setFilterYear(y=>y+1)}>›</button>
-        </div>
-      </div>
-
-      {/* 年間サマリー */}
-      <div style={{background:"#fff",padding:"14px 16px",borderBottom:"1px solid #e5e7eb"}}>
-        <div style={{display:"flex",gap:8}}>
-          <div style={{flex:1,textAlign:"center"}}>
-            <div style={{fontSize:10,color:"#888"}}>収入</div>
-            <div style={{fontSize:16,fontWeight:800,color:"#00B900"}}>{yen(totalIncome)}</div>
-          </div>
-          <div style={{flex:1,textAlign:"center"}}>
-            <div style={{fontSize:10,color:"#888"}}>経費</div>
-            <div style={{fontSize:16,fontWeight:800,color:"#EF4444"}}>{yen(-totalCost)}</div>
-          </div>
-          <div style={{flex:1,textAlign:"center",background:totalProfit>=0?"#f0fdf4":"#fef2f2",borderRadius:10,padding:"4px 0"}}>
-            <div style={{fontSize:10,color:"#888"}}>利益</div>
-            <div style={{fontSize:16,fontWeight:800,color:totalProfit>=0?"#00B900":"#EF4444"}}>{yen(totalProfit)}</div>
-          </div>
-        </div>
-      </div>
-
-      <div style={{flex:1,overflowY:"auto",padding:"10px 12px"}}>
-        {eventFinances.length === 0 && (
-          <div style={S.calEmpty}>この年のイベントはありません</div>
-        )}
-
-        {/* 月別グループ表示 */}
-        {Object.keys(monthly).sort((a,b)=>a-b).map(m => (
-          <div key={m} style={{marginBottom:14}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 4px 6px"}}>
-              <span style={{fontSize:13,fontWeight:800,color:"#333"}}>{m}月</span>
-              <span style={{fontSize:12,fontWeight:700,color:monthly[m].profit>=0?"#00B900":"#EF4444"}}>
-                {yen(monthly[m].profit)}
-              </span>
-            </div>
-            {eventFinances
-              .filter(f => new Date(f.ev.date).getMonth()+1 === Number(m))
-              .map(f => (
-                <div key={f.ev.fbKey} style={{...S.eventCard, borderLeft:`4px solid ${f.ev.color}`, flexDirection:"column", alignItems:"stretch", gap:6}} onClick={()=>onOpenEvent(f.ev)}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <span style={S.eventCardTitle}>{f.ev.title}</span>
-                    <span style={{fontSize:14,fontWeight:800,color:f.profit>=0?"#00B900":"#EF4444"}}>{yen(f.profit)}</span>
-                  </div>
-                  <div style={{fontSize:11,color:"#888"}}>{fmt(f.ev.date)} {f.ev.time}〜</div>
-                  <div style={{display:"flex",gap:4,fontSize:11,color:"#666",background:"#f9fafb",borderRadius:8,padding:"6px 8px"}}>
-                    <span>👥 {f.participants}名 × ¥{f.fee.toLocaleString()}</span>
-                    <span style={{color:"#00B900"}}>= {yen(f.income)}</span>
-                    <span style={{marginLeft:"auto",color:"#EF4444"}}>経費 {yen(-f.venueCost)}</span>
-                  </div>
-                </div>
-              ))}
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
